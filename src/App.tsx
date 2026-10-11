@@ -9,6 +9,7 @@ import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { DeckProvider } from './contexts/DeckContext';
 import { QuoteProvider } from './contexts/QuoteContext';
 import { StoryProvider } from './contexts/StoryContext';
+import { SettingsProvider } from './contexts/SettingsContext';
 import { Home } from './Home';
 import { Reader } from './Reader';
 import { Profile } from './Profile';
@@ -82,11 +83,13 @@ export default function App() {
     <ThemeProvider>
       <AuthProvider>
         <StoryProvider>
-          <DeckProvider>
-            <QuoteProvider>
-              <AppContent />
-            </QuoteProvider>
-          </DeckProvider>
+          <SettingsProvider>
+            <DeckProvider>
+              <QuoteProvider>
+                <AppContent />
+              </QuoteProvider>
+            </DeckProvider>
+          </SettingsProvider>
         </StoryProvider>
       </AuthProvider>
     </ThemeProvider>

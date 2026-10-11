@@ -27,6 +27,8 @@ import {
   EyeOff,
   Edit3,
   Layout,
+  LayoutGrid,
+  Image as ImageIcon,
   Sun,
   Moon
 } from 'lucide-react';
@@ -36,18 +38,19 @@ import { useTheme } from './contexts/ThemeContext';
 import { useDeck } from './contexts/DeckContext';
 import { useQuotes } from './contexts/QuoteContext';
 import { useStories } from './contexts/StoryContext';
+import { useSettings } from './contexts/SettingsContext';
 import { CEFRLevel, AppLanguage, AppTheme } from './types';
 import confetti from 'canvas-confetti';
 
-const levels: CEFRLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1'];
+const levels: CEFRLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 
 const appLanguages: { code: AppLanguage; name: string; flag: string }[] = [
-  { code: 'PT', name: 'Português', flag: '🇧🇷' },
   { code: 'EN', name: 'English', flag: '🇺🇸' },
   { code: 'ES', name: 'Español', flag: '🇪🇸' },
   { code: 'FR', name: 'Français', flag: '🇫🇷' },
   { code: 'DE', name: 'Deutsch', flag: '🇩🇪' },
   { code: 'RU', name: 'Русский', flag: '🇷🇺' },
+  { code: 'PT', name: 'Português', flag: '🇧🇷' },
 ];
 
 export const Profile: React.FC = () => {
@@ -70,11 +73,12 @@ export const Profile: React.FC = () => {
   const { cards, dueCards, removeCard, updateCardProgress } = useDeck();
   const { quotes, removeQuote } = useQuotes();
   const { stories, deleteStory, updateStory } = useStories();
+  const { logoUrl, logoGallery, setLogo, addToGallery, removeFromGallery } = useSettings();
   
-  const [activeTab, setActiveTab] = useState<'preferences' | 'deck' | 'quotes' | 'posts'>(() => {
+  const [activeTab, setActiveTab] = useState<'preferences' | 'deck' | 'quotes' | 'posts' | 'logo'>(() => {
     const params = new URLSearchParams(location.search);
     const tab = params.get('tab');
-    if (tab === 'posts' || tab === 'deck' || tab === 'quotes' || tab === 'preferences') {
+    if (tab === 'posts' || tab === 'deck' || tab === 'quotes' || tab === 'preferences' || tab === 'logo') {
       return tab as any;
     }
     return 'deck'; // Temporary default, will be refined in useEffect
@@ -263,13 +267,22 @@ export const Profile: React.FC = () => {
           <aside className="w-full md:w-64 shrink-0">
             <nav className="space-y-2">
               {user?.role === 'admin' && (
-                <button
-                  onClick={() => setActiveTab('posts')}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all border ${activeTab === 'posts' ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-900/20 text-blue-600' : 'border-transparent hover:bg-[var(--card-bg)] opacity-60 hover:opacity-100'}`}
-                >
-                  <Layout size={20} className={activeTab === 'posts' ? 'text-blue-500' : ''} />
-                  Postagens
-                </button>
+                <>
+                  <button
+                    onClick={() => setActiveTab('posts')}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all border ${activeTab === 'posts' ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-900/20 text-blue-600' : 'border-transparent hover:bg-[var(--card-bg)] opacity-60 hover:opacity-100'}`}
+                  >
+                    <Layout size={20} className={activeTab === 'posts' ? 'text-blue-500' : ''} />
+                    Postagens
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('logo')}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold transition-all border ${activeTab === 'logo' ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-900/20 text-emerald-600' : 'border-transparent hover:bg-[var(--card-bg)] opacity-60 hover:opacity-100'}`}
+                  >
+                    <ImageIcon size={20} className={activeTab === 'logo' ? 'text-emerald-500' : ''} />
+                    Logo
+                  </button>
+                </>
               )}
               <button
                 onClick={() => setActiveTab('deck')}
@@ -511,6 +524,111 @@ export const Profile: React.FC = () => {
                         ))}
                       </div>
                     )}
+                  </section>
+                </motion.div>
+              ) : activeTab === 'logo' && user?.role === 'admin' ? (
+                <motion.div
+                  key="logo"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="space-y-8"
+                >
+                  <section>
+                    <div className="flex items-center justify-between mb-8">
+                      <h2 className="text-2xl font-bold flex items-center gap-3">
+                        <ImageIcon size={24} className="text-emerald-500" /> Logotipo do Site
+                      </h2>
+                    </div>
+
+                    <div className="p-8 bg-[var(--card-bg)] border border-[var(--border)] rounded-[32px] mb-8">
+                      <div className="flex flex-col md:flex-row gap-8 items-center">
+                        <div className="w-32 h-32 rounded-2xl bg-[var(--background)] border border-[var(--border)] flex items-center justify-center overflow-hidden shrink-0">
+                          {logoUrl ? (
+                            <img src={logoUrl} alt="Logo Preview" className="max-w-full max-h-full object-contain" />
+                          ) : (
+                            <BookOpen size={48} className="opacity-20" />
+                          )}
+                        </div>
+                        <div className="flex-1 space-y-4">
+                          <div>
+                            <h3 className="font-bold text-lg">Trocar Logotipo</h3>
+                            <p className="text-sm opacity-50">Insira a URL de uma imagem para ser o novo logotipo do site.</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <input 
+                              type="text"
+                              placeholder="https://..."
+                              className="flex-1 px-4 py-3 bg-[var(--background)] border border-[var(--border)] rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  const url = (e.target as HTMLInputElement).value;
+                                  if (url) {
+                                    setLogo(url);
+                                    addToGallery(url);
+                                    (e.target as HTMLInputElement).value = '';
+                                  }
+                                }
+                              }}
+                            />
+                            <button 
+                              onClick={(e) => {
+                                const input = (e.currentTarget.previousSibling as HTMLInputElement);
+                                if (input.value) {
+                                  setLogo(input.value);
+                                  addToGallery(input.value);
+                                  input.value = '';
+                                }
+                              }}
+                              className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all"
+                            >
+                              Aplicar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <h3 className="font-bold text-lg flex items-center gap-2">
+                        <LayoutGrid size={20} className="opacity-40" /> Galeria de Logotipos
+                      </h3>
+                      {logoGallery.length === 0 ? (
+                        <div className="p-12 text-center border-2 border-dashed border-[var(--border)] rounded-[32px] opacity-40">
+                          <ImageIcon size={48} className="mx-auto mb-4" />
+                          <p>Sua galeria de logos está vazia.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-4">
+                          {logoGallery.map((url, idx) => (
+                            <div key={idx} className="group relative aspect-square rounded-2xl bg-[var(--card-bg)] border border-[var(--border)] overflow-hidden">
+                              <img src={url} alt={`Logo ${idx}`} className="w-full h-full object-contain p-2" />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-2 gap-2">
+                                <button 
+                                  onClick={() => setLogo(url)}
+                                  className="w-8 h-8 bg-white text-emerald-600 rounded-lg flex items-center justify-center hover:scale-110 transition-transform"
+                                  title="Usar este logo"
+                                >
+                                  <CheckCircle2 size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => removeFromGallery(url)}
+                                  className="w-8 h-8 bg-white text-red-600 rounded-lg flex items-center justify-center hover:scale-110 transition-transform"
+                                  title="Remover"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                              {logoUrl === url && (
+                                <div className="absolute top-2 left-2 px-2 py-0.5 bg-emerald-600 text-white text-[8px] font-black uppercase tracking-widest rounded-full">
+                                  Ativo
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </section>
                 </motion.div>
               ) : activeTab === 'quotes' ? (

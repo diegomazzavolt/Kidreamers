@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type CEFRLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
+export type CEFRLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
 
 export type MainCategory = 'Contos' | 'Infantil' | 'NEWS' | 'All';
 
@@ -84,7 +84,7 @@ export interface Quote {
 
 export type AppTheme = 'light' | 'dark' | 'eyeProtection';
 
-export type AppLanguage = 'PT' | 'EN' | 'ES' | 'FR' | 'DE' | 'RU';
+export type AppLanguage = 'EN' | 'ES' | 'FR' | 'DE' | 'RU' | 'PT';
 
 export type VoiceGender = 'male' | 'female';
 

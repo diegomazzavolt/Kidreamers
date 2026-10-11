@@ -1,5 +1,5 @@
 {
   "name": "Kidreamers",
   "description": "Language learning through stories",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["web-share"]
 }

@@ -3,15 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Header } from './components/Header';
-import { SidebarFilters } from './components/SidebarFilters';
 import { StoryCard } from './components/StoryCard';
 import { useStories } from './contexts/StoryContext';
 import { useTheme } from './contexts/ThemeContext';
-import { CEFRLevel, MainCategory, NewsSubCategory } from './types';
-import { Filter, Search, Newspaper } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { MainCategory, NewsSubCategory } from './types';
+import { Search, Newspaper } from 'lucide-react';
 
 import { useNavigate } from 'react-router-dom';
 
@@ -20,10 +18,9 @@ export const Home: React.FC = () => {
   const { stories, isLoading: isStoriesLoading } = useStories();
   const { t, language } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'recent' | 'difficulty' | 'popular'>('recent');
-  const [selectedCategory, setSelectedCategory] = useState<MainCategory>('All');
-  const [selectedNewsSubCategory, setSelectedNewsSubCategory] = useState<NewsSubCategory>('All');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [sortBy] = useState<'recent' | 'difficulty' | 'popular'>('recent');
+  const [selectedCategory] = useState<MainCategory>('All');
+  const [selectedNewsSubCategory] = useState<NewsSubCategory>('All');
 
   const filteredStories = useMemo(() => {
     let result = [...stories];
@@ -31,19 +28,7 @@ export const Home: React.FC = () => {
     // Filter out hidden stories
     result = result.filter(s => s.isHidden !== true);
     
-    // Category Filter
-    if (selectedCategory !== 'All') {
-      result = result.filter(s => s.category === selectedCategory);
-      
-      // News specific logic
-      if (selectedCategory === 'NEWS') {
-        // Filter by sub-category
-        if (selectedNewsSubCategory !== 'All') {
-          result = result.filter(s => s.newsSubCategory === selectedNewsSubCategory);
-        }
-      }
-    }
-
+    // Simple Search Filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       result = result.filter(s => {
@@ -56,22 +41,8 @@ export const Home: React.FC = () => {
       });
     }
 
-    if (sortBy === 'difficulty') {
-      const levelOrder: Record<CEFRLevel, number> = { 'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5 };
-      result.sort((a, b) => levelOrder[a.originalLevel] - levelOrder[b.originalLevel]);
-    } else if (sortBy === 'popular') {
-      // Simulate popularity by using a stable hash of the ID
-      result.sort((a, b) => {
-        const hashA = a.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const hashB = b.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        return (hashB % 100) - (hashA % 100);
-      });
-    } else {
-      result.reverse();
-    }
-
     return result;
-  }, [stories, searchQuery, sortBy, selectedCategory, selectedNewsSubCategory, language]);
+  }, [stories, searchQuery, language]);
 
   const handleStoryClick = (id: string) => {
     navigate(`/read/${id}`);
@@ -82,21 +53,9 @@ export const Home: React.FC = () => {
       <Header 
         searchQuery={searchQuery} 
         setSearchQuery={setSearchQuery} 
-        onOpenFilters={() => setIsSidebarOpen(true)} 
       />
 
       <div className="flex-1 flex max-w-7xl mx-auto w-full">
-        <SidebarFilters
-          isOpen={isSidebarOpen}
-          onClose={() => setIsSidebarOpen(false)}
-          sortBy={sortBy}
-          setSortBy={setSortBy}
-          selectedCategory={selectedCategory}
-          setSelectedCategory={setSelectedCategory}
-          selectedNewsSubCategory={selectedNewsSubCategory}
-          setSelectedNewsSubCategory={setSelectedNewsSubCategory}
-        />
-
         <main className="flex-1 p-4 sm:p-8">
           {selectedCategory === 'NEWS' && (
             <div className="mb-8 p-6 bg-blue-600 text-white rounded-[2rem] shadow-xl shadow-blue-500/20 flex items-center gap-4 animate-in fade-in slide-in-from-left-4 duration-500">

@@ -6,8 +6,11 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Plus, Minus, Settings, Volume2, Loader2, Globe, ChevronLeft, ChevronRight, BookOpen, ChevronDown, Edit3, Mic } from 'lucide-react';
+import { ArrowLeft, Plus, Volume2, Loader2, Globe, ChevronLeft, ChevronRight, BookOpen, Edit3, Dna, X } from 'lucide-react';
 import parse, { domToReact, HTMLReactParserOptions, Element, Text } from 'html-react-parser';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import { Header } from './components/Header';
 import { CustomAudioPlayer } from './components/CustomAudioPlayer';
 import { useStories } from './contexts/StoryContext';
@@ -18,21 +21,58 @@ import { useAuth } from './contexts/AuthContext';
 import { CEFRLevel, AppLanguage } from './types';
 import { translateWordWithAI, generateSpeechWithAI } from './services/geminiService';
 
+// Context for DNA highlight state to prevent full re-parses
+const DnaContext = React.createContext<{
+  hoveredDnaId: string | null;
+  selectedDnaId: string | null;
+  setHoveredDnaId: (id: string | null) => void;
+  onDnaClick: (e: React.MouseEvent, dnaId: string) => void;
+}>({
+  hoveredDnaId: null,
+  selectedDnaId: null,
+  setHoveredDnaId: () => {},
+  onDnaClick: () => {},
+});
+
+const DnaSpan: React.FC<{ 
+  dnaId: string; 
+  children: React.ReactNode; 
+  nodeKey: string | number;
+}> = ({ dnaId, children, nodeKey }) => {
+  const { hoveredDnaId, selectedDnaId, setHoveredDnaId, onDnaClick } = React.useContext(DnaContext);
+  const isHovered = hoveredDnaId === dnaId;
+  const isSelected = selectedDnaId === dnaId;
+
+  return (
+    <span 
+      data-dna-id={dnaId}
+      className={`
+        transition-colors duration-200 cursor-pointer rounded-sm inline
+        ${isHovered ? 'bg-blue-500/20 shadow-[0_0_10px_rgba(59,130,246,0.1)]' : ''}
+        ${isSelected ? 'bg-blue-500/30 ring-1 ring-blue-500/50' : ''}
+      `}
+      onMouseEnter={() => setHoveredDnaId(dnaId)}
+      onMouseLeave={() => setHoveredDnaId(null)}
+      onClick={(e) => onDnaClick(e, dnaId)}
+    >
+      {children}
+    </span>
+  );
+};
+
 export const Reader: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { t, language, translationLanguage, setTranslationLanguage, fontSize, setFontSize } = useTheme();
+  const { t, language, translationLanguage, fontSize, setFontSize, voiceGender, setVoiceGender } = useTheme();
   const { addCard } = useDeck();
   const { addQuote } = useQuotes();
   const { getStory, stories } = useStories();
-  
   const { user, updatePreferredFontSize } = useAuth();
   const story = useMemo(() => getStory(id || ''), [id, getStory]);
-  const { voiceGender } = useTheme();
   
   const contentRef = useRef<HTMLDivElement>(null);
-  const shadowRef = useRef<HTMLDivElement>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
+  const isInteracting = useRef(false);
   const isSelecting = useRef(false);
   const longPressTimer = useRef<any>(null);
   const selectionStartRange = useRef<{ node: Node, offset: number } | null>(null);
@@ -54,33 +94,9 @@ export const Reader: React.FC = () => {
   const [currentLevel, setCurrentLevel] = useState<CEFRLevel>(user?.preferredLevel || 'A1');
   const [readerLanguage, setReaderLanguage] = useState<AppLanguage>(language);
   const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
-  const [showLevelSelector, setShowLevelSelector] = useState(false);
   const [isAdapting, setIsAdapting] = useState(false);
   const [showFlyIcon, setShowFlyIcon] = useState<{ x: number; y: number } | null>(null);
-  const [translationLevel, setTranslationLevel] = useState<CEFRLevel>(currentLevel);
-
-  // Helper to automatically align content by injecting structural IDs if missing
-  const dnaAligner = useCallback((html: string) => {
-    if (!html) return '';
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    
-    // Select blocks that match across translations
-    const blocks = doc.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, dt, dd');
-    blocks.forEach((block, index) => {
-      // Only assign structural ID if it doesn't have a manual one
-      if (!block.id) {
-        block.id = `dna-blk-${index}`;
-      }
-    });
-
-    return doc.body.innerHTML;
-  }, []);
-
-  // Use currentLevel as translationLevel by default
-  useEffect(() => {
-    setTranslationLevel(currentLevel);
-  }, [currentLevel]);
+  const [hoveredDnaId, setHoveredDnaId] = useState<string | null>(null);
 
   // Sync font size from user profile if available
   useEffect(() => {
@@ -92,21 +108,21 @@ export const Reader: React.FC = () => {
   const currentContent = useMemo(() => {
     if (!story) return '';
     
-    let rawHtml = '';
     // If story has chapters, use the current chapter's content
     if (story.chapters && story.chapters.length > 0) {
       const chapter = story.chapters[currentChapterIndex];
-      if (chapter && chapter.contents) {
-        const langContent = chapter.contents[readerLanguage];
-        if (langContent) rawHtml = langContent[currentLevel] || '';
-      }
-    } else if (story.contents) {
-      const langContent = story.contents[readerLanguage];
-      if (langContent) rawHtml = langContent[currentLevel] || '';
+      if (!chapter || !chapter.contents) return '';
+      const langContent = chapter.contents[readerLanguage];
+      if (!langContent) return '';
+      return langContent[currentLevel] || '';
     }
 
-    return dnaAligner(rawHtml);
-  }, [story, currentLevel, readerLanguage, currentChapterIndex, dnaAligner]);
+    // Fallback for old stories
+    if (!story.contents) return '';
+    const langContent = story.contents[readerLanguage];
+    if (!langContent) return '';
+    return langContent[currentLevel] || '';
+  }, [story, currentLevel, readerLanguage, currentChapterIndex]);
 
   const currentChapter = useMemo(() => {
     if (story?.chapters && story.chapters.length > 0) {
@@ -134,7 +150,18 @@ export const Reader: React.FC = () => {
   const currentAudioUrl = useMemo(() => {
     const source = currentChapter || story;
     if (!source || !source.audio) return null;
-    return source.audio[readerLanguage]?.[currentLevel]?.[voiceGender] || null;
+    const langAudio = source.audio[readerLanguage];
+    if (!langAudio) return null;
+    const levelAudio = langAudio[currentLevel];
+    if (!levelAudio) return null;
+
+    // Preference: current voiceGender
+    if (levelAudio[voiceGender]?.trim()) return levelAudio[voiceGender].trim();
+    // Fallback: the other gender if available
+    const otherGender = voiceGender === 'male' ? 'female' : 'male';
+    if (levelAudio[otherGender]?.trim()) return levelAudio[otherGender].trim();
+    
+    return null;
   }, [story, currentChapter, readerLanguage, currentLevel, voiceGender]);
 
   // Sync reader language with app language on mount or if story doesn't have content for it
@@ -163,46 +190,33 @@ export const Reader: React.FC = () => {
   const processedContent = useMemo(() => {
     let content = currentContent;
     
-    // Ensure all <w> tags have the w-word class for styling
-    // This is just for initial rendering if needed, but the parser handle it better
-    
+    // 1. Community Highlights
     if (story?.communityHighlights) {
-      // Sort by length descending to avoid partial matches inside longer highlights
       const sortedHighlights = [...story.communityHighlights].sort((a, b) => b.text.length - a.text.length);
-      
       sortedHighlights.forEach(highlight => {
         const escapedText = highlight.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`(${escapedText})`, 'gi');
-        // We use a custom tag that we'll handle in the parser
         content = content.replace(regex, `<highlight data-count="${highlight.count}">$1</highlight>`);
       });
     }
+
     return content;
   }, [currentContent, story?.communityHighlights]);
   
-  const translationContent = useMemo(() => {
-    if (!story) return '';
-    
-    let rawHtml = '';
-    if (story.chapters && story.chapters.length > 0) {
-      const chapter = story.chapters[currentChapterIndex];
-      if (chapter && chapter.contents) {
-        const langContent = chapter.contents[translationLanguage];
-        if (langContent) rawHtml = langContent[translationLevel] || '';
-      }
-    } else if (story.contents) {
-      const langContent = story.contents[translationLanguage];
-      if (langContent) rawHtml = langContent[translationLevel] || '';
-    }
-
-    return dnaAligner(rawHtml);
-  }, [story, translationLanguage, translationLevel, currentChapterIndex, dnaAligner]);
-
   // Translation State
-  const [selectedWord, setSelectedWord] = useState<{ word: string; rect: DOMRect; translation: string; isSelection?: boolean } | null>(null);
+  const [selectedWord, setSelectedWord] = useState<{ 
+    word: string; 
+    rect: DOMRect; 
+    translation: string; 
+    isSelection?: boolean;
+    dnaId?: string | null;
+    dnaIds?: string[];
+    absTop?: number;
+    absLeft?: number;
+  } | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [popoverTranslationLang, setPopoverTranslationLang] = useState<AppLanguage | null>(null);
   const [translationLang, setTranslationLang] = useState<AppLanguage>(translationLanguage);
-  const [showLangSelector, setShowLangSelector] = useState(false);
 
   // Update translation language if preference changes
   useEffect(() => {
@@ -221,55 +235,17 @@ export const Reader: React.FC = () => {
     if (!story) navigate('/');
   }, [story, navigate]);
 
-  const getTranslation = useCallback((id: string | null) => {
-    if (!id || !shadowRef.current) return null;
-    const element = shadowRef.current.querySelector(`[id="${id}"]`);
-    return element ? element.textContent?.trim() : null;
-  }, []);
-
-  const handleTranslate = useCallback(async (word: string, rect: DOMRect, targetLang?: AppLanguage, isSelection?: boolean, ids?: string[]) => {
-    // If it's a selection with specific IDs, use those
-    if (ids && ids.length > 0) {
-      const translations = ids.map(id => getTranslation(id)).filter(Boolean);
-      if (translations.length > 0) {
-        const translation = translations.join(' ');
-        setSelectedWord({ word, rect, translation, isSelection: true });
-      }
-      return;
-    }
-
-    // Single click case or selection without specific IDs - don't show balloon if no translation
-  }, [getTranslation]);
-
-  const handleWordClick = useCallback((e: React.MouseEvent | React.TouchEvent, id: string | null, word: string) => {
-    if (!id) return;
-    
-    const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-    
-    // Logic for Single Word/Paragraph click
-    const translation = getTranslation(id);
-    
-    if (translation) {
-      e.preventDefault();
-      e.stopPropagation();
-      setSelectedWord({ word, rect, translation });
-    }
-  }, [getTranslation]);
-
-  const handleMouseEnter = useCallback((group: string | null) => {
-    if (!group) return;
-    const elements = document.querySelectorAll(`[data-group="${group}"]`);
-    elements.forEach(el => el.classList.add('bg-highlight'));
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    const highlights = document.querySelectorAll('.bg-highlight');
-    highlights.forEach(el => el.classList.remove('bg-highlight'));
-  }, []);
-
   const triggerTranslation = async () => {
-    // Disabled for DNA system as per user request
+    if (!selectedWord) return;
+    setIsTranslating(true);
+    try {
+      const translation = await translateWordWithAI(selectedWord.word, translationLang);
+      setSelectedWord(prev => prev ? { ...prev, translation } : null);
+    } catch (error) {
+      console.error("Translation error:", error);
+    } finally {
+      setIsTranslating(false);
+    }
   };
 
   const handleLevelChange = (level: CEFRLevel) => {
@@ -277,47 +253,67 @@ export const Reader: React.FC = () => {
     setCurrentLevel(level);
   };
 
+  // Character limits for selection
   useEffect(() => {
-    let timeout: NodeJS.Timeout;
-    
-    const onSelectionChange = () => {
-      // Don't trigger popover while the user is actively dragging
-      if (isSelecting.current) return;
-
-      clearTimeout(timeout);
-      timeout = setTimeout(() => {
-        // Double check again after timeout
-        if (isSelecting.current) return;
-
-        const selection = window.getSelection();
-        const text = selection?.toString().trim();
-        
-        if (text && text.length > 0 && !selection?.isCollapsed) {
-          const range = selection?.getRangeAt(0);
-          const rect = range?.getBoundingClientRect();
-          
-          // Check if selection is within the reader content
-          const readerContent = document.querySelector('.rich-text-content');
-          if (readerContent && selection?.anchorNode && readerContent.contains(selection.anchorNode)) {
-            if (rect && rect.width > 0) {
-              // Extract all elements with [id] tags from selection
-              const fragment = range.cloneContents();
-              const idElements = fragment.querySelectorAll('[id]');
-              const ids = Array.from(idElements).map(el => el.getAttribute('id')).filter((id): id is string => !!id);
-              
-              handleTranslate(text, rect, undefined, true, ids);
-            }
-          }
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        const text = selection.toString();
+        const nonSpaceLength = text.replace(/\s/g, '').length;
+        if (nonSpaceLength > 250) {
+          // Forcefully limit selection to 250 characters (excluding spaces)
+          selection.collapseToEnd();
         }
-      }, 300); // Debounce to allow selection to finish
+      }
     };
 
-    document.addEventListener('selectionchange', onSelectionChange);
-    return () => {
-      document.removeEventListener('selectionchange', onSelectionChange);
-      clearTimeout(timeout);
-    };
-  }, [handleTranslate]);
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, []);
+
+  // Function to extract text by DNA ID from content
+  const getTranslationForDnaId = useCallback((dnaId: string, level: CEFRLevel, overrideLang?: AppLanguage) => {
+    if (!story) return null;
+    
+    const languages: AppLanguage[] = ['EN', 'ES', 'FR', 'DE', 'RU', 'PT'];
+    
+    // If overrideLang is provided, only try that one
+    // Otherwise, prioritize translationLanguage then other languages
+    const searchLangs = overrideLang 
+      ? [overrideLang] 
+      : [translationLanguage, ...languages.filter(l => l !== readerLanguage && l !== translationLanguage)];
+    
+    for (const lang of searchLangs) {
+      let content = '';
+      if (story.chapters && story.chapters.length > 0) {
+        const chapter = story.chapters[currentChapterIndex];
+        content = chapter?.contents[lang]?.[level] || '';
+      } else {
+        content = story.contents[lang]?.[level] || '';
+      }
+
+      if (content) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(content, 'text/html');
+        const elements = doc.querySelectorAll(`span[data-dna-id="${dnaId}"]`);
+        if (elements.length > 0) {
+          const fullText = Array.from(elements).map(el => el.innerHTML || '').join('');
+          const parentBlock = elements[0].closest('p, h1, h2, h3, h4, h5, h6, div, li');
+          return { 
+            text: fullText, 
+            lang,
+            blockIndex: Array.from(doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, div, li')).indexOf(parentBlock!)
+          };
+        }
+      }
+    }
+
+    return null;
+  }, [story, currentChapterIndex, readerLanguage]);
+
+  useEffect(() => {
+    // Selection listeners enabled via contentRef in another useEffect
+  }, []);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -392,11 +388,84 @@ export const Reader: React.FC = () => {
       });
     };
 
-    const handleTouchEnd = () => {
+    const handleTouchEnd = (e: TouchEvent) => {
       if (longPressTimer.current) {
         clearTimeout(longPressTimer.current);
         longPressTimer.current = null;
       }
+      
+      // Delay slightly to let the browser finalize the selection
+      setTimeout(() => {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) {
+          const text = sel.toString().trim();
+          if (text) {
+            const range = sel.getRangeAt(0);
+            const rects = range.getClientRects();
+            // Use the main bounding rect for consistent positioning near the selection
+            const rect = range.getBoundingClientRect();
+
+            // Collect translations for all DNA-mapped segments within the selection
+            const resList: ({ text: string, blockIndex: number } | null)[] = [];
+            const seenIds = new Set<string>();
+
+            const addId = (id: string | null | undefined) => {
+              if (id && !seenIds.has(id)) {
+                seenIds.add(id);
+                const res = getTranslationForDnaId(id, currentLevel);
+                resList.push(res as any);
+              }
+            };
+
+            // 1. Check start boundary
+            let startNode = range.startContainer;
+            if (startNode.nodeType === 3) startNode = startNode.parentNode!;
+            addId((startNode as HTMLElement).closest?.('span[data-dna-id]')?.getAttribute('data-dna-id'));
+
+            // 2. Check inner spans
+            const fragment = range.cloneContents();
+            const tempDiv = document.createElement('div');
+            tempDiv.appendChild(fragment);
+            tempDiv.querySelectorAll('[data-dna-id]').forEach(el => {
+              addId(el.getAttribute('data-dna-id'));
+            });
+
+            // 3. Check end boundary
+            let endNode = range.endContainer;
+            if (endNode.nodeType === 3) endNode = endNode.parentNode!;
+            addId((endNode as HTMLElement).closest?.('span[data-dna-id]')?.getAttribute('data-dna-id'));
+
+            let joinedTranslation = '';
+            resList.forEach((res, i) => {
+              if (!res) return;
+              if (i > 0) {
+                const prev = resList.slice(0, i).reverse().find(r => r !== null);
+                if (prev && (prev as any).blockIndex !== (res as any).blockIndex) {
+                  joinedTranslation += '<br/>';
+                } else {
+                  joinedTranslation += ' ';
+                }
+              }
+              joinedTranslation += res.text;
+            });
+
+            const primaryLangId = seenIds.size > 0 ? Array.from(seenIds)[0] : null;
+
+            setPopoverTranslationLang(translationLanguage);
+            setSelectedWord({
+              word: text,
+              rect: rect as DOMRect,
+              translation: joinedTranslation,
+              isSelection: true,
+              dnaId: seenIds.size === 1 ? primaryLangId : null,
+              dnaIds: Array.from(seenIds),
+              absTop: rect.top + window.scrollY,
+              absLeft: rect.left + rect.width / 2
+            });
+          }
+        }
+      }, 100);
+
       isSelecting.current = false;
       touchStartPos.current = null;
       selectionStartRange.current = null;
@@ -406,67 +475,189 @@ export const Reader: React.FC = () => {
       document.body.style.webkitUserSelect = '';
     };
 
+    const handleMouseDown = () => {
+      isInteracting.current = true;
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      isInteracting.current = false;
+      // Delay slightly to let the browser finalize the selection
+      setTimeout(() => {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) {
+          const text = sel.toString().trim();
+          if (text) {
+            // Find if selection is within the contentRef
+            const range = sel.getRangeAt(0);
+            if (!el.contains(range.commonAncestorContainer)) return;
+
+            const rects = range.getClientRects();
+            // Use the main bounding rect for consistent positioning near the selection
+            const rect = range.getBoundingClientRect();
+
+            // Collect translations for all DNA-mapped segments within the selection
+            const resList: ({ text: string, blockIndex: number } | null)[] = [];
+            const seenIds = new Set<string>();
+
+            const addId = (id: string | null | undefined) => {
+              if (id && !seenIds.has(id)) {
+                seenIds.add(id);
+                const res = getTranslationForDnaId(id, currentLevel);
+                resList.push(res as any);
+              }
+            };
+
+            // 1. Check start boundary
+            let startNode = range.startContainer;
+            if (startNode.nodeType === 3) startNode = startNode.parentNode!;
+            addId((startNode as HTMLElement).closest?.('span[data-dna-id]')?.getAttribute('data-dna-id'));
+
+            // 2. Check inner spans
+            const fragment = range.cloneContents();
+            const tempDiv = document.createElement('div');
+            tempDiv.appendChild(fragment);
+            tempDiv.querySelectorAll('[data-dna-id]').forEach(el => {
+              addId(el.getAttribute('data-dna-id'));
+            });
+
+            // 3. Check end boundary
+            let endNode = range.endContainer;
+            if (endNode.nodeType === 3) endNode = endNode.parentNode!;
+            addId((endNode as HTMLElement).closest?.('span[data-dna-id]')?.getAttribute('data-dna-id'));
+
+            let joinedTranslation = '';
+            resList.forEach((res, i) => {
+              if (!res) return;
+              if (i > 0) {
+                const prev = resList.slice(0, i).reverse().find(r => r !== null);
+                if (prev && (prev as any).blockIndex !== (res as any).blockIndex) {
+                  joinedTranslation += '<br/>';
+                } else {
+                  joinedTranslation += ' ';
+                }
+              }
+              joinedTranslation += res.text;
+            });
+
+            const primaryLangId = seenIds.size > 0 ? Array.from(seenIds)[0] : null;
+
+            setPopoverTranslationLang(translationLanguage);
+            setSelectedWord({
+              word: text,
+              rect: rect as DOMRect,
+              translation: joinedTranslation,
+              isSelection: true,
+              dnaId: seenIds.size === 1 ? primaryLangId : null,
+              dnaIds: Array.from(seenIds),
+              absTop: rect.top + window.scrollY,
+              absLeft: rect.left + rect.width / 2
+            });
+          }
+        }
+      }, 50);
+    };
+
     el.addEventListener('touchstart', handleTouchStart, { passive: false });
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
     el.addEventListener('touchend', handleTouchEnd);
     el.addEventListener('touchcancel', handleTouchEnd);
+    el.addEventListener('mousedown', handleMouseDown);
+    el.addEventListener('mouseup', handleMouseUp);
 
     return () => {
       el.removeEventListener('touchstart', handleTouchStart);
       el.removeEventListener('touchmove', handleTouchMove);
       el.removeEventListener('touchend', handleTouchEnd);
       el.removeEventListener('touchcancel', handleTouchEnd);
+      el.removeEventListener('mousedown', handleMouseDown);
+      el.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
 
-  const parseOptions: HTMLReactParserOptions = {
-    replace: (domNode) => {
-      // Handle any element with an 'id' attribute for the word-by-word system
-      if (domNode instanceof Element && domNode.attribs.id) {
-        const id = domNode.attribs.id;
-        const group = domNode.attribs['data-group'];
-        
-        // Use child nodes if available, otherwise data direct
-        const getTextContent = (node: Element): string => {
-          return node.children.map(child => {
-            if (child.type === 'text') return (child as Text).data;
-            if (child.type === 'tag') return getTextContent(child as Element);
-            return '';
-          }).join('');
-        };
+  // 4. Stable Parser Options
+  const handleDnaClick = useCallback((e: React.MouseEvent, dnaId: string) => {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
+      return;
+    }
 
-        const wordText = getTextContent(domNode);
-        
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const parentContainer = (e.currentTarget as HTMLElement).closest('.prose, .markdown-body');
+    let fullText = '';
+    
+    if (parentContainer) {
+      const parts = parentContainer.querySelectorAll(`span[data-dna-id="${dnaId}"]`);
+      fullText = Array.from(parts).map(p => (p as HTMLElement).innerText || p.textContent || '').join('');
+    } else {
+      fullText = (e.currentTarget as HTMLElement).innerText || (e.currentTarget as HTMLElement).textContent || '';
+    }
+
+    const result = getTranslationForDnaId(dnaId, currentLevel);
+    
+    setPopoverTranslationLang(translationLanguage);
+    setSelectedWord({ 
+      word: fullText, 
+      rect, 
+      translation: result?.text || '',
+      isSelection: false,
+      dnaId: dnaId,
+      absTop: rect.top + window.scrollY,
+      absLeft: rect.left + rect.width / 2
+    });
+  }, [getTranslationForDnaId, currentLevel]);
+
+  const parseOptions: HTMLReactParserOptions = useMemo(() => ({
+    withStartIndices: true,
+    replace: (domNode) => {
+      const nodeKey = (domNode as any).startIndex ?? Math.random();
+
+      if (domNode.type === 'tag' && domNode.name === 'highlight') {
         return (
-          <span
-            id={id}
-            data-group={group}
-            className={id.startsWith('dna-blk-') ? 'dna-block' : 'w-word'}
-            onClick={(e) => handleWordClick(e, id, wordText)}
-            onMouseEnter={() => handleMouseEnter(group)}
-            onMouseLeave={() => handleMouseLeave()}
+          <span key={`highlight-${nodeKey}`} className="relative inline border-b-2 border-blue-400/30 bg-blue-400/5 cursor-help transition-colors hover:bg-blue-400/10">
+            {domToReact(domNode.children as any, parseOptions)}
+          </span>
+        );
+      }
+
+      if (domNode.type === 'tag' && domNode.attribs && domNode.attribs['data-dna-id']) {
+        const dnaId = domNode.attribs['data-dna-id'];
+        return (
+          <DnaSpan 
+            key={`${dnaId}-${nodeKey}`}
+            dnaId={dnaId}
+            nodeKey={nodeKey}
           >
             {domToReact(domNode.children as any, parseOptions)}
-          </span>
+          </DnaSpan>
         );
       }
 
-      // Handle our custom highlight tag
-      if (domNode instanceof Element && domNode.name === 'highlight') {
-        const count = parseInt(domNode.attribs['data-count'] || '0');
+      if (domNode.type === 'tag' && (domNode.name === 'w' || domNode.name === 'word')) {
         return (
-          <span className="relative inline border-b-2 border-blue-400/30 bg-blue-400/5 cursor-help transition-colors hover:bg-blue-400/10">
+          <span key={`w-${nodeKey}`} className="inline">
             {domToReact(domNode.children as any, parseOptions)}
           </span>
         );
       }
 
-      // Return plain text for text nodes to avoid component overhead and selection conflicts
       if ((domNode as any).type === 'text') {
         return (domNode as any).data;
       }
     }
-  };
+  }), [handleDnaClick]); // Stable but needs handleDnaClick reference
+
+  const renderedContent = useMemo(() => {
+    return parse(processedContent, parseOptions);
+  }, [processedContent, parseOptions]);
+
+  const dnaContextValue = useMemo(() => ({
+    hoveredDnaId,
+    selectedDnaId: selectedWord && !selectedWord.isSelection ? selectedWord.dnaId || null : null,
+    setHoveredDnaId,
+    onDnaClick: handleDnaClick
+  }), [hoveredDnaId, selectedWord, handleDnaClick]);
 
   const handleSaveToDeck = () => {
     if (selectedWord) {
@@ -481,7 +672,7 @@ export const Reader: React.FC = () => {
     }
   };
 
-  const handleSaveQuote = async () => {
+  const handleSaveQuote = () => {
     if (selectedWord) {
       addQuote(
         selectedWord.word, 
@@ -497,9 +688,23 @@ export const Reader: React.FC = () => {
 
   if (!story) return null;
 
+  const availableLangs = story.contents ? (Object.keys(story.contents) as AppLanguage[]) : [];
+  const availableLevels = story.contents[readerLanguage] ? (Object.keys(story.contents[readerLanguage]) as CEFRLevel[]) : [];
+
   return (
-    <div className="min-h-screen flex flex-col bg-[var(--background)] transition-colors duration-300">
-      <Header />
+    <div className="min-h-screen relative flex flex-col bg-[var(--background)] transition-colors duration-300">
+      <Header 
+        readerControls={{
+          readerLanguage,
+          setReaderLanguage,
+          currentLevel,
+          setCurrentLevel: handleLevelChange,
+          availableLangs,
+          availableLevels,
+          fontSize,
+          setFontSize
+        }}
+      />
       {/* Flying Icon Animation */}
       <AnimatePresence>
         {showFlyIcon && (
@@ -520,7 +725,7 @@ export const Reader: React.FC = () => {
       </AnimatePresence>
 
       {/* Title Section */}
-      <div className="max-w-3xl mx-auto w-full px-6 pt-4 pb-4">
+      <div className="max-w-3xl mx-auto w-full px-6 pt-[11px] pb-0">
         <div className="flex flex-col items-center mb-2">
           {user?.role === 'admin' && (
             <div className="w-full flex justify-end mb-4">
@@ -542,194 +747,69 @@ export const Reader: React.FC = () => {
               {localizedSubtitle}
             </p>
           )}
-          <p className="text-xl font-serif italic opacity-60 mt-2 text-center">by {story.author}</p>
         </div>
       </div>
 
-      {/* Reader Controls */}
-      <div className="sticky top-0 md:relative landscape:relative z-20 bg-[var(--background)] border-b border-[var(--border)]">
-        <div className="max-w-3xl mx-auto px-6 py-3 flex flex-col gap-4 md:gap-0 landscape:gap-0">
-          {/* Top Row: Selector and Font Size */}
-          <div className="flex items-center justify-between w-full gap-4">
-            <div className="relative">
-              <button 
-                onClick={() => setShowLevelSelector(!showLevelSelector)}
-                className="flex items-center gap-2 px-4 py-2.5 bg-[var(--card-bg)] rounded-xl border border-[var(--border)] hover:bg-[var(--background)] transition-all shadow-sm"
+      {/* Navigation & Audio Player Bar (Sticky) */}
+      <div className="sticky top-0 z-40 bg-[var(--background)] shadow-sm py-2 transition-shadow">
+        <div className="max-w-3xl mx-auto w-full px-4 flex items-center justify-between gap-2">
+          {/* Previous Story Arrow */}
+          <div className="w-10 flex justify-center">
+            {prevStory && (
+              <button
+                onClick={() => { navigate(`/read/${prevStory.id}`); }}
+                className="p-1 hover:bg-[var(--card-bg)] rounded-full transition-all text-current opacity-60 hover:opacity-100"
+                title={prevStory.title}
               >
-                <span className="text-sm font-bold uppercase tracking-wider">
-                  {readerLanguage} • {currentLevel}
-                </span>
-                <ChevronDown size={16} className={`transition-transform duration-200 ${showLevelSelector ? 'rotate-180' : ''}`} />
+                <ChevronLeft size={32} />
               </button>
-
-              <AnimatePresence>
-                {showLevelSelector && (
-                  <>
-                    <div className="fixed inset-0 z-10" onClick={() => setShowLevelSelector(false)} />
-                    <motion.div
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      className="absolute top-full mt-2 left-0 w-64 bg-[var(--background)] border border-[var(--border)] rounded-2xl shadow-xl z-20 overflow-hidden"
-                    >
-                      <div className="p-4 space-y-4">
-                        {/* Reading Selection */}
-                        <div className="space-y-3">
-                          <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 px-1">Lendo Agora (Main)</p>
-                          <div className="grid grid-cols-3 gap-1">
-                            {(['PT', 'EN', 'ES', 'FR', 'DE', 'RU'] as AppLanguage[]).map(lang => (
-                              <button
-                                key={lang}
-                                disabled={!story.contents[lang]}
-                                onClick={() => { setReaderLanguage(lang); }}
-                                className={`py-2 text-xs font-bold rounded-lg transition-all ${readerLanguage === lang ? 'bg-blue-600 text-white' : 'hover:bg-[var(--card-bg)] opacity-60 disabled:opacity-10'}`}
-                              >
-                                {lang}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="grid grid-cols-5 gap-1">
-                            {(['A1', 'A2', 'B1', 'B2', 'C1'] as CEFRLevel[]).map(level => (
-                              <button
-                                key={level}
-                                disabled={!story.contents[readerLanguage]?.[level]}
-                                onClick={() => { handleLevelChange(level); }}
-                                className={`py-2 text-[10px] font-black rounded-lg transition-all ${currentLevel === level ? 'bg-blue-600 text-white' : 'hover:bg-[var(--card-bg)] opacity-60 disabled:opacity-10'}`}
-                              >
-                                {level}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Translation Selection */}
-                        <div className="pt-4 border-t border-[var(--border)] space-y-3">
-                          <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 px-1">Traduzir para (Shadow)</p>
-                          <div className="grid grid-cols-3 gap-1">
-                            {(['PT', 'EN', 'ES', 'FR', 'DE', 'RU'] as AppLanguage[]).map(lang => (
-                              <button
-                                key={lang}
-                                disabled={!story.contents[lang]}
-                                onClick={() => { setTranslationLanguage(lang); }}
-                                className={`py-2 text-xs font-bold rounded-lg transition-all ${translationLanguage === lang ? 'bg-green-600 text-white' : 'hover:bg-[var(--card-bg)] opacity-60 disabled:opacity-10'}`}
-                              >
-                                {lang}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="grid grid-cols-5 gap-1">
-                            {(['A1', 'A2', 'B1', 'B2', 'C1'] as CEFRLevel[]).map(level => (
-                              <button
-                                key={level}
-                                disabled={!story.contents[translationLanguage]?.[level]}
-                                onClick={() => { setTranslationLevel(level); }}
-                                className={`py-2 text-[10px] font-black rounded-lg transition-all ${translationLevel === level ? 'bg-green-600 text-white' : 'hover:bg-[var(--card-bg)] opacity-60 disabled:opacity-10'}`}
-                              >
-                                {level}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Desktop/Tablet/Landscape Audio Player (Centered) */}
-            {currentAudioUrl && (
-              <div className="hidden md:block landscape:block flex-1 max-w-md mx-auto px-4">
-                <CustomAudioPlayer src={currentAudioUrl} className="shadow-none border-white/10" />
-              </div>
             )}
-
-            <div className="flex items-center gap-1 bg-[var(--card-bg)] rounded-xl border border-[var(--border)] p-1">
-              <button 
-                onClick={() => {
-                  const newSize = Math.max(12, fontSize - 2);
-                  setFontSize(newSize);
-                  if (user) updatePreferredFontSize(newSize);
-                }}
-                className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[var(--background)] transition-colors"
-                title="Diminuir fonte"
-              >
-                <Minus size={16} />
-              </button>
-              <div className="w-px h-4 bg-[var(--border)] mx-1" />
-              <button 
-                onClick={() => {
-                  const newSize = Math.min(48, fontSize + 2);
-                  setFontSize(newSize);
-                  if (user) updatePreferredFontSize(newSize);
-                }}
-                className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[var(--background)] transition-colors"
-                title="Aumentar fonte"
-              >
-                <Plus size={16} />
-              </button>
-            </div>
           </div>
 
-          {/* Mobile Portrait Audio Player (Below) */}
-          {currentAudioUrl && (
-            <div className="md:hidden landscape:hidden w-full">
-              <CustomAudioPlayer src={currentAudioUrl} className="shadow-none border-white/10" />
-            </div>
-          )}
+          {/* Audio Player (Centered) */}
+          <div className="flex-1 max-w-md mx-auto min-w-0">
+            {currentAudioUrl ? (
+              <CustomAudioPlayer src={currentAudioUrl} className="shadow-none scale-90 sm:scale-100 origin-center" />
+            ) : (
+              <div className="h-10 invisible" /> // Alignment placeholder
+            )}
+          </div>
+
+          {/* Next Story Arrow */}
+          <div className="w-10 flex justify-center">
+            {nextStory && (
+              <button
+                onClick={() => { navigate(`/read/${nextStory.id}`); }}
+                className="p-1 hover:bg-[var(--card-bg)] rounded-full transition-all text-current opacity-60 hover:opacity-100"
+                title={nextStory.title}
+              >
+                <ChevronRight size={32} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Reader Content */}
       <main className="flex-1 relative max-w-3xl mx-auto w-full px-6 pt-4 pb-16">
-        {/* Shadow Translation Container */}
-        <div 
-          ref={shadowRef} 
-          className="hidden" 
-          aria-hidden="true" 
-          dangerouslySetInnerHTML={{ __html: translationContent }} 
-        />
-        
-        {/* Navigation Arrows (Floating) */}
-        <div className="fixed inset-y-0 left-0 right-0 pointer-events-none z-50">
-          <div className="max-w-[1400px] mx-auto h-full flex items-center justify-between px-4 md:px-8">
-            {prevStory ? (
-              <button
-                onClick={() => { navigate(`/read/${prevStory.id}`); }}
-                className="pointer-events-auto p-2 text-white drop-shadow-[0_4px_12px_rgba(0,0,0,0.5)] hover:scale-125 transition-all opacity-60 hover:opacity-100"
-                title={prevStory.title}
-              >
-                <ChevronLeft size={64} strokeWidth={2.5} />
-              </button>
-            ) : <div />}
 
-            {nextStory ? (
-              <button
-                onClick={() => { navigate(`/read/${nextStory.id}`); }}
-                className="pointer-events-auto p-2 text-white drop-shadow-[0_4px_12px_rgba(0,0,0,0.5)] hover:scale-125 transition-all opacity-60 hover:opacity-100"
-                title={nextStory.title}
-              >
-                <ChevronRight size={64} strokeWidth={2.5} />
-              </button>
-            ) : <div />}
+          <div 
+            ref={contentRef}
+            style={{ 
+              fontSize: `${fontSize}px`,
+              WebkitTouchCallout: 'none',
+              userSelect: 'text',
+              WebkitUserSelect: 'text'
+            }}
+            className={`
+              relative leading-[1.8] font-serif transition-all duration-500
+              rich-text-content prose max-w-none
+            `}
+          >
+            <DnaContext.Provider value={dnaContextValue}>
+              {renderedContent}
+            </DnaContext.Provider>
           </div>
-        </div>
-
-        <div 
-          ref={contentRef}
-          style={{ 
-            fontSize: `${fontSize}px`,
-            WebkitTouchCallout: 'none',
-            userSelect: 'text',
-            WebkitUserSelect: 'text'
-          }}
-          className={`
-            relative leading-[1.8] font-serif transition-all duration-500
-            rich-text-content prose max-w-none
-          `}
-        >
-          {parse(processedContent, parseOptions)}
-        </div>
 
         {/* Chapter Navigation */}
         {story.chapters && story.chapters.length > 1 && (
@@ -762,26 +842,6 @@ export const Reader: React.FC = () => {
                 <ChevronRight size={32} className="group-hover:translate-x-1 transition-transform" />
               </button>
             </div>
-
-            <div className="flex flex-wrap justify-center gap-2 max-w-xl">
-              {story.chapters.map((ch, idx) => (
-                <button
-                  key={ch.id}
-                  onClick={() => {
-                    setCurrentChapterIndex(idx);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                  className={`
-                    px-4 py-2 rounded-xl text-xs font-bold transition-all
-                    ${currentChapterIndex === idx 
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' 
-                      : 'bg-[var(--card-bg)] border border-[var(--border)] opacity-60 hover:opacity-100'}
-                  `}
-                >
-                  {idx + 1}. {ch.title}
-                </button>
-              ))}
-            </div>
           </div>
         )}
       </main>
@@ -791,36 +851,83 @@ export const Reader: React.FC = () => {
         {selectedWord && (
           <>
             <div 
-              className="fixed inset-0 z-40" 
-              onClick={() => { setSelectedWord(null); setShowLangSelector(false); }} 
+              className="fixed inset-0 z-45" 
+              onClick={() => { setSelectedWord(null); }} 
             />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 10 }}
-              style={{
-                position: 'fixed',
-                top: Math.max(10, selectedWord.rect.top - 180),
-                left: Math.max(10, Math.min(window.innerWidth - 230, selectedWord.rect.left - 80)),
-                zIndex: 50
-              }}
-              className="w-56 bg-[var(--background)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden"
-            >
-              <div className="p-4">
-                <div className="flex justify-between items-center mb-3">
-                  <p className="font-bold text-lg truncate flex-1 mr-2">{selectedWord.word}</p>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {selectedWord.isSelection && (
-                      <button 
-                        onClick={triggerTranslation}
-                        disabled={true}
-                        className="p-1.5 rounded-lg opacity-20 cursor-not-allowed text-blue-600"
-                        title={t('reader.translate')}
-                      >
-                        <Globe size={18} />
-                      </button>
-                    )}
+              {(() => {
+                return (
+                  <motion.div
+                    key="translation-popover"
+                    initial={{ opacity: 0, scale: 0.95, y: "-95%", translateX: "-50%" }}
+                    animate={{ opacity: 1, scale: 1, y: "-100%", translateX: "-50%" }}
+                    exit={{ opacity: 0, scale: 0.95, y: "-95%", translateX: "-50%" }}
+                    style={{
+                      position: 'absolute',
+                      top: Math.max(10, (selectedWord?.absTop || 0) - 12),
+                      left: '50%',
+                      zIndex: 50
+                    }}
+                    className="w-[calc(100%-2rem)] max-w-md bg-[var(--background)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden px-4 py-3"
+                  >
+              <div className="flex justify-between items-center mb-4">
+                <div className="flex items-center gap-0.5 overflow-x-auto no-scrollbar">
+                  {(['EN', 'ES', 'FR', 'DE', 'RU', 'PT'] as AppLanguage[]).map(lang => {
+                    const hasContent = !!story.contents[lang];
+                    const isActive = (popoverTranslationLang || readerLanguage) === lang;
+                    
+                    return (
+                      <button
+                        key={lang}
+                        disabled={!hasContent}
+                        onClick={() => {
+                          if (lang === popoverTranslationLang) return;
+                          setPopoverTranslationLang(lang);
+                          
+                          if (selectedWord.dnaId) {
+                             const res = getTranslationForDnaId(selectedWord.dnaId, currentLevel, lang);
+                             if (res) {
+                               setSelectedWord(prev => prev ? { ...prev, translation: res.text } : null);
+                             }
+                          } else if (selectedWord.dnaIds && selectedWord.dnaIds.length > 0) {
+                             const resList = selectedWord.dnaIds
+                               .map(id => getTranslationForDnaId(id, currentLevel, lang));
+                             
+                             let joinedTranslation = '';
+                             resList.forEach((res, i) => {
+                               if (!res) return;
+                               if (i > 0) {
+                                 const prev = resList.slice(0, i).reverse().find(r => r !== null);
+                                 if (prev && (prev as any).blockIndex !== (res as any).blockIndex) {
+                                   joinedTranslation += '<br/>';
+                                 } else {
+                                   joinedTranslation += ' ';
+                                 }
+                               }
+                               joinedTranslation += res.text;
+                             });
 
+                             if (joinedTranslation) {
+                               setSelectedWord(prev => prev ? { ...prev, translation: joinedTranslation } : null);
+                             }
+                          }
+                        }}
+                        className={`
+                          px-2 py-1 rounded-lg text-xs font-bold transition-all
+                          ${isActive 
+                            ? "bg-blue-600 text-white shadow-md shadow-blue-500/20" 
+                            : hasContent
+                              ? "text-gray-500 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400"
+                              : "opacity-20 cursor-not-allowed text-gray-400"}
+                        `}
+                      >
+                        {lang}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  {selectedWord?.word && selectedWord.word.replace(/\s/g, '').length <= 100 && (
                     <button 
                       onClick={handleSaveToDeck}
                       disabled={isTranslating}
@@ -829,59 +936,40 @@ export const Reader: React.FC = () => {
                     >
                       <Plus size={18} />
                     </button>
+                  )}
 
-                    {selectedWord.isSelection && (
-                      <button 
-                        onClick={handleSaveQuote}
-                        className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors text-blue-600"
-                        title={t('reader.saveQuote')}
-                      >
-                        <BookOpen size={18} />
-                      </button>
-                    )}
-
-                    {!selectedWord.isSelection && (
-                      <button
-                        onClick={() => {
-                          const u = new SpeechSynthesisUtterance(selectedWord.word);
-                          u.lang = 'en-US';
-                          window.speechSynthesis.speak(u);
-                        }}
-                        className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors text-blue-500"
-                        title={t('reader.speak')}
-                      >
-                        <Volume2 size={18} />
-                      </button>
-                    )}
+                  {selectedWord?.word && selectedWord.word.replace(/\s/g, '').length <= 250 && (
+                    <button 
+                      onClick={handleSaveQuote}
+                      className="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors text-blue-600"
+                      title={t('reader.saveQuote')}
+                    >
+                      <BookOpen size={18} />
+                    </button>
+                  )}
                   </div>
                 </div>
                 
-                <div className="h-px bg-gray-100 dark:bg-gray-800 mb-3" />
-                
-                {selectedWord.isSelection ? (
-                  <div className="space-y-2">
-                    {selectedWord.translation && (
-                      <div className="mt-1 pt-3 border-t border-[var(--border)]">
-                        <p className="text-blue-600 dark:text-blue-400 font-medium text-sm leading-relaxed">{selectedWord.translation}</p>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex justify-between items-start mb-1">
-                      <span className="text-xs font-bold uppercase tracking-widest opacity-40">
-                        {translationLang}
-                      </span>
+                <div className="space-y-2 pr-1 max-h-[70vh] overflow-y-auto custom-scrollbar">
+                  {isTranslating ? (
+                    <div className="flex items-center gap-2 py-1">
+                      <Loader2 size={14} className="animate-spin text-blue-500" />
+                      <span className="text-sm opacity-50 italic">{t('reader.translating')}</span>
                     </div>
-                    
-                    <p className="text-blue-600 dark:text-blue-400 font-medium leading-relaxed">{selectedWord.translation}</p>
-                  </>
-                )}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+                  ) : selectedWord?.translation ? (
+                    <div className="mt-1 text-blue-600 dark:text-blue-400 text-sm leading-relaxed max-w-none prose prose-sm dark:prose-invert prose-blue">
+                      {parse(selectedWord.translation)}
+                    </div>
+                  ) : (
+                     <p className="text-xs opacity-40 italic">Clique no globo para traduzir</p>
+                  )}
+                </div>
+                  </motion.div>
+                );
+              })()}
+            </>
+          )}
+        </AnimatePresence>
     </div>
   );
 };

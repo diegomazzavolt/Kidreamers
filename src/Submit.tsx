@@ -31,14 +31,14 @@ export const Submit: React.FC = () => {
 
   const editId = new URLSearchParams(location.search).get('edit');
   
-  const languages: AppLanguage[] = ['EN', 'PT', 'ES', 'FR', 'DE', 'RU'];
-  const levels: CEFRLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1'];
+  const languages: AppLanguage[] = ['EN', 'ES', 'FR', 'DE', 'RU', 'PT'];
+  const levels: CEFRLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 
   const createEmptyContents = () => {
     const initial: any = {};
     languages.forEach(lang => {
       initial[lang] = {
-        A1: '', A2: '', B1: '', B2: '', C1: ''
+        A1: '', A2: '', B1: '', B2: '', C1: '', C2: ''
       };
     });
     return initial;
@@ -56,7 +56,7 @@ export const Submit: React.FC = () => {
     const initial: any = {};
     languages.forEach(lang => {
       initial[lang] = {
-        A1: {}, A2: {}, B1: {}, B2: {}, C1: {}
+        A1: {}, A2: {}, B1: {}, B2: {}, C1: {}, C2: {}
       };
     });
     return initial;
@@ -78,6 +78,7 @@ export const Submit: React.FC = () => {
   const [globalImageGallery, setGlobalImageGallery] = useState<string[]>([]);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [quoteBackgroundImage, setQuoteBackgroundImage] = useState<string | null>(null);
+  const [dnaMappingId, setDnaMappingId] = useState<string | null>(null);
   const imageContainerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -162,8 +163,8 @@ export const Submit: React.FC = () => {
               ...createEmptyAudio(),
               ...ch.audio
             } as any,
-            activeLangTab: (Object.keys(ch.contents)[0] as AppLanguage) || 'EN',
-            activeLevelTab: (Object.keys(ch.contents[Object.keys(ch.contents)[0] as AppLanguage] || {})[0] as CEFRLevel) || 'A1',
+            activeLangTab: 'EN',
+            activeLevelTab: 'A1',
             showSelector: false
           })));
         } else {
@@ -188,8 +189,8 @@ export const Submit: React.FC = () => {
               ...createEmptyAudio(),
               ...story.audio
             } as any,
-            activeLangTab: (Object.keys(story.contents)[0] as AppLanguage) || 'EN',
-            activeLevelTab: (Object.keys(story.contents[Object.keys(story.contents)[0] as AppLanguage] || {})[0] as CEFRLevel) || 'A1',
+            activeLangTab: 'EN',
+            activeLevelTab: 'A1',
             showSelector: false
           }]);
         }
@@ -296,10 +297,7 @@ export const Submit: React.FC = () => {
 
   const sanitizeHTML = (html: string | undefined | null) => {
     if (!html) return '';
-    // Remove empty tags except for <w> tags which are required for mapping
-    return html.replace(/<(\w+)[^>]*>\s*<\/\1>/g, (match, tag) => {
-      return tag.toLowerCase() === 'w' ? match : '';
-    }).trim();
+    return html.replace(/<(\w+)[^>]*>\s*<\/\1>/g, '').trim();
   };
 
   const handleSubmit = async (e?: React.FormEvent, isDraft: boolean = false) => {
@@ -429,98 +427,6 @@ export const Submit: React.FC = () => {
                   </div>
                   <h2 className="text-xl font-bold">Capítulo {index + 1}</h2>
                 </div>
-
-                <div className="relative">
-                  <button 
-                    type="button"
-                    onClick={() => updateChapter(index, { showSelector: !chapter.showSelector })}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 rounded-xl border border-gray-200 hover:bg-gray-200 transition-all shadow-sm"
-                  >
-                    <Globe size={16} className="text-blue-600" />
-                    <span className="text-sm font-bold uppercase tracking-wider">
-                      {chapter.activeLangTab} • {chapter.activeLevelTab}
-                    </span>
-                    <ChevronDown size={16} className={`transition-transform duration-200 ${chapter.showSelector ? 'rotate-180' : ''}`} />
-                  </button>
-
-                  <AnimatePresence>
-                    {chapter.showSelector && (
-                      <>
-                        <div className="fixed inset-0 z-30" onClick={() => updateChapter(index, { showSelector: false })} />
-                        <motion.div
-                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                          className="absolute top-full mt-2 right-0 w-64 bg-white border border-gray-200 rounded-2xl shadow-2xl z-40 overflow-hidden"
-                        >
-                          <div className="p-4 space-y-4">
-                            {/* Language Selection */}
-                            <div>
-                              <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 px-1">Language</p>
-                              <div className="grid grid-cols-3 gap-1">
-                                {languages.map(lang => {
-                                  const hasContent = levels.some(lvl => {
-                                    const content = chapter.contents[lang]?.[lvl];
-                                    return sanitizeHTML(content);
-                                  });
-                                  return (
-                                    <button
-                                      key={lang}
-                                      type="button"
-                                      onClick={() => updateChapter(index, { activeLangTab: lang })}
-                                      className={`
-                                        py-2 text-xs font-bold rounded-lg transition-all relative
-                                        ${chapter.activeLangTab === lang 
-                                          ? 'bg-blue-600 text-white' 
-                                          : 'bg-gray-50 text-gray-500 hover:bg-gray-100'}
-                                      `}
-                                    >
-                                      {lang}
-                                      {hasContent && (
-                                        <div className="absolute top-1 right-1 w-1.5 h-1.5 bg-green-500 rounded-full" />
-                                      )}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-
-                            {/* Level Selection */}
-                            <div>
-                              <p className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 px-1">Level</p>
-                              <div className="grid grid-cols-5 gap-1">
-                                {levels.map(level => {
-                                  const content = chapter.contents[chapter.activeLangTab]?.[level];
-                                  const hasContent = sanitizeHTML(content);
-                                  return (
-                                    <button
-                                      key={level}
-                                      type="button"
-                                      onClick={() => {
-                                        updateChapter(index, { activeLevelTab: level, showSelector: false });
-                                      }}
-                                      className={`
-                                        py-2 text-[10px] font-black rounded-lg transition-all relative
-                                        ${chapter.activeLevelTab === level 
-                                          ? 'bg-blue-600 text-white' 
-                                          : 'bg-gray-50 text-gray-500 hover:bg-gray-100'}
-                                      `}
-                                    >
-                                      {level}
-                                      {hasContent && (
-                                        <div className="absolute top-1 right-1 w-1 h-1 bg-green-500 rounded-full" />
-                                      )}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          </div>
-                        </motion.div>
-                      </>
-                    )}
-                  </AnimatePresence>
-                </div>
               </div>
 
               {/* Title & Subtitle */}
@@ -563,9 +469,50 @@ export const Submit: React.FC = () => {
                     audioFemale={chapter.audio[chapter.activeLangTab]?.[chapter.activeLevelTab]?.female}
                     language={chapter.activeLangTab}
                     level={chapter.activeLevelTab}
+                    onLanguageChange={(lang) => updateChapter(index, { activeLangTab: lang as AppLanguage })}
+                    onLevelChange={(level) => updateChapter(index, { activeLevelTab: level as CEFRLevel })}
                     onSetAudio={(gender, url) => updateChapterAudio(index, chapter.activeLangTab, chapter.activeLevelTab, gender, url)}
                     onSetProfileImage={setProfileImage}
                     onSetQuoteBackgroundImage={setQuoteBackgroundImage}
+                    dnaMappingId={dnaMappingId}
+                    dnaMarkCount={dnaMappingId ? (() => {
+                      const uniqueIds = new Set();
+                      const parser = new DOMParser();
+                      
+                      const checkHtml = (html: string | undefined | null) => {
+                        if (!html || typeof html !== 'string') return;
+                        const doc = parser.parseFromString(html, 'text/html');
+                        // Find all spans with our DNA ID
+                        const elements = doc.querySelectorAll(`span[data-dna-id="${dnaMappingId}"]`);
+                        
+                        // We count one occurrence per chapter content block if it has the ID
+                        if (elements.length > 0) {
+                          return true;
+                        }
+                        return false;
+                      };
+
+                      let totalCount = 0;
+                      // Check all chapters and their full content matrix
+                      chapters.forEach(chapter => {
+                        Object.values(chapter.contents || {}).forEach(langLevels => {
+                          if (langLevels) {
+                            Object.values(langLevels).forEach(html => {
+                              if (checkHtml(html)) totalCount++;
+                            });
+                          }
+                        });
+                      });
+                      return totalCount;
+                    })() : 0}
+                    onToggleDnaMapping={(active) => {
+                      if (active) {
+                        const newId = `dna-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                        setDnaMappingId(newId);
+                      } else {
+                        setDnaMappingId(null);
+                      }
+                    }}
                     onImageUpload={(url) => {
                       setGlobalImageGallery(prev => {
                         if (!prev.includes(url)) {

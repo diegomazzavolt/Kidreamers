@@ -5,7 +5,6 @@
 
 import React from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
-import { Mark, mergeAttributes } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Underline from '@tiptap/extension-underline';
@@ -15,8 +14,34 @@ import TextAlign from '@tiptap/extension-text-align';
 import ImageResize from 'tiptap-extension-resize-image';
 import Dropcursor from '@tiptap/extension-dropcursor';
 import Gapcursor from '@tiptap/extension-gapcursor';
-import { Bold, Italic, Underline as UnderlineIcon, List, Heading1, Heading2, Quote, Redo, Undo, AlignLeft, AlignCenter, AlignRight, Link as LinkIcon, Check, X as CloseIcon, Image as ImageIcon, Globe, Plus, Download, Mic, Music, Loader2 } from 'lucide-react';
+import { Bold, Italic, Underline as UnderlineIcon, List, Heading1, Heading2, Quote, Redo, Undo, AlignLeft, AlignCenter, AlignRight, Link as LinkIcon, Check, X as CloseIcon, Image as ImageIcon, Globe, Plus, Download, Mic, Music, Loader2, ChevronDown, Dna, Trash2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { generateSpeechWithAI } from '../services/geminiService';
+import { Mark, mergeAttributes } from '@tiptap/core';
+
+// Custom DNA Mark extension
+const DnaMark = Mark.create({
+  name: 'dnaMark',
+  priority: 1000,
+  addAttributes() {
+    return {
+      dnaId: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-dna-id'),
+        renderHTML: attributes => {
+          if (!attributes.dnaId) return {};
+          return { 'data-dna-id': attributes.dnaId, class: 'dna-mapped-text' };
+        },
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'span[data-dna-id]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['span', mergeAttributes(HTMLAttributes), 0];
+  },
+});
 
 interface RichTextEditorProps {
   content: string;
@@ -29,10 +54,15 @@ interface RichTextEditorProps {
   audioFemale?: string;
   language?: string;
   level?: string;
+  onLanguageChange?: (lang: string) => void;
+  onLevelChange?: (level: string) => void;
   onSetAudio?: (gender: 'male' | 'female', url: string) => void;
   onSetProfileImage?: (url: string) => void;
   onSetQuoteBackgroundImage?: (url: string) => void;
   onImageUpload?: (url: string) => void;
+  dnaMappingId?: string | null;
+  dnaMarkCount?: number;
+  onToggleDnaMapping?: (active: boolean) => void;
 }
 
 export const RichTextEditor: React.FC<RichTextEditorProps> = ({ 
@@ -46,10 +76,15 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   audioFemale,
   language = 'PT',
   level = 'A1',
+  onLanguageChange,
+  onLevelChange,
   onSetAudio,
   onSetProfileImage,
   onSetQuoteBackgroundImage,
-  onImageUpload 
+  onImageUpload,
+  dnaMappingId,
+  dnaMarkCount = 0,
+  onToggleDnaMapping,
 }) => {
   const [linkUrl, setLinkUrl] = React.useState('');
   const [showLinkInput, setShowLinkInput] = React.useState(false);
@@ -57,35 +92,12 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const [audioUrl, setAudioUrl] = React.useState('');
   const [mode, setMode] = React.useState<'visual' | 'html' | 'images' | 'narration'>('visual');
   const [isGeneratingAudio, setIsGeneratingAudio] = React.useState<'male' | 'female' | null>(null);
+  const [showLevelSelector, setShowLevelSelector] = React.useState(false);
+  const isMouseDown = React.useRef(false);
   const imageInputRef = React.useRef<HTMLInputElement>(null);
 
-  const WMark = React.useMemo(() => Mark.create({
-    name: 'word',
-    inclusive: false,
-    parseHTML() {
-      return [{ 
-        tag: 'w',
-        preserveWhitespace: 'full'
-      }]
-    },
-    renderHTML({ HTMLAttributes }) {
-      return ['w', mergeAttributes(HTMLAttributes), 0]
-    },
-    addAttributes() {
-      return {
-        id: {
-          default: null,
-          parseHTML: element => element.getAttribute('id'),
-          renderHTML: attributes => attributes.id ? { id: attributes.id } : {},
-        },
-        'data-group': {
-          default: null,
-          parseHTML: element => element.getAttribute('data-group'),
-          renderHTML: attributes => attributes['data-group'] ? { 'data-group': attributes['data-group'] } : {},
-        },
-      }
-    },
-  }), []);
+  const languages = ['EN', 'ES', 'FR', 'DE', 'RU', 'PT'];
+  const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 
   const editor = useEditor({
     extensions: [
@@ -126,7 +138,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       Placeholder.configure({
         placeholder: 'Write your story here...',
       }),
-      WMark,
+      DnaMark,
     ],
     content,
     onUpdate: ({ editor }) => {
@@ -134,6 +146,44 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       onChange(html);
     },
   });
+
+  // Use editor events for more reliable DNA marking
+  React.useEffect(() => {
+    if (!editor) return;
+
+    const handleMouseDown = () => {
+      isMouseDown.current = true;
+    };
+
+    const handleMouseUp = () => {
+      isMouseDown.current = false;
+      
+      // If DNA mapping is active, apply it at the end of selection
+      if (dnaMappingId) {
+        const { from, to } = editor.state.selection;
+        if (from !== to) {
+          editor.chain().setMark('dnaMark', { dnaId: dnaMappingId }).run();
+        }
+      }
+    };
+
+    const container = editor.options.element;
+    if (container instanceof HTMLElement) {
+      container.addEventListener('mousedown', handleMouseDown);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      if (container instanceof HTMLElement) {
+        container.removeEventListener('mousedown', handleMouseDown);
+        window.removeEventListener('mouseup', handleMouseUp);
+      }
+    };
+  }, [editor, dnaMappingId]);
+
+  const toggleDnaMode = () => {
+    onToggleDnaMapping?.(!dnaMappingId);
+  };
 
   const setLink = React.useCallback(() => {
     if (linkUrl) {
@@ -179,7 +229,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   };
 
   React.useEffect(() => {
-    if (editor && content !== editor.getHTML()) {
+    if (editor && !isMouseDown.current && content !== editor.getHTML()) {
       editor.commands.setContent(content, false as any);
     }
   }, [content, editor]);
@@ -233,6 +283,70 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         >
           Narração
         </button>
+
+        {/* Level & Language Selector */}
+        <div className="flex items-center px-4 gap-4">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowLevelSelector(!showLevelSelector)}
+              className="flex items-center gap-1.5 px-2 h-7 bg-blue-600 text-white text-[10px] font-black rounded-lg transition-all hover:bg-blue-700 active:scale-95 shadow-sm"
+            >
+              {level}
+              <ChevronDown size={10} className={`transition-transform duration-200 ${showLevelSelector ? 'rotate-180' : ''}`} />
+            </button>
+
+            <AnimatePresence>
+              {showLevelSelector && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowLevelSelector(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute top-full mt-2 left-0 w-24 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-2xl z-50 overflow-hidden p-1"
+                  >
+                    <div className="grid grid-cols-2 gap-1">
+                      {levels.map(l => (
+                        <button
+                          key={l}
+                          type="button"
+                          onClick={() => {
+                            onLevelChange?.(l);
+                            setShowLevelSelector(false);
+                          }}
+                          className={`
+                            h-7 flex items-center justify-center text-[10px] font-black rounded-lg transition-all
+                            ${level === l 
+                              ? 'bg-blue-600 text-white' 
+                              : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}
+                          `}
+                        >
+                          {l}
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <div className="w-px h-4 bg-gray-200 dark:bg-gray-800" />
+          
+          <div className="flex items-center gap-1">
+            {languages.map(lang => (
+              <button
+                key={lang}
+                type="button"
+                onClick={() => onLanguageChange?.(lang)}
+                className={`w-7 h-7 flex items-center justify-center text-[10px] font-black rounded-lg transition-all ${language === lang ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+              >
+                {lang}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="ml-auto flex items-stretch">
           <button 
@@ -403,6 +517,49 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           >
             <Quote size={18} />
           </MenuButton>
+
+          <div className={`w-px h-6 mx-1 ${forceLight ? 'bg-gray-200' : 'bg-gray-200 dark:bg-gray-800'}`} />
+
+          <button
+            type="button"
+            onClick={toggleDnaMode}
+            title={dnaMappingId ? "Mapeamento Manual ativo... selecione frases em outras línguas/níveis" : "Mapeamento Manual (DNA)"}
+            className={`
+              p-2 rounded-lg transition-all flex items-center gap-2 group relative
+              ${dnaMappingId 
+                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20' 
+                : forceLight ? 'hover:bg-gray-100 text-purple-600' : 'hover:bg-gray-100 dark:hover:bg-gray-800 text-purple-600'}
+            `}
+          >
+            <div className="relative">
+              <Dna size={18} className={dnaMappingId ? 'animate-pulse' : ''} />
+              {dnaMappingId && dnaMarkCount > 0 && (
+                <motion.span 
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  key={dnaMarkCount}
+                  className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full font-bold border-2 border-purple-600"
+                >
+                  {dnaMarkCount}
+                </motion.span>
+              )}
+            </div>
+            {dnaMappingId && <span className="text-[10px] font-black uppercase tracking-widest">DNA ON</span>}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().unsetMark('dnaMark').run()}
+            title="Remover Mapeamento DNA da seleção"
+            className={`
+              p-2 rounded-lg transition-all flex items-center gap-2
+              ${forceLight 
+                ? 'hover:bg-red-50 text-red-500' 
+                : 'hover:bg-red-900/20 text-red-400'}
+            `}
+          >
+            <Trash2 size={18} />
+          </button>
           
           <div className="flex-1" />
           <MenuButton onClick={() => editor.chain().focus().undo().run()} title="Undo">
@@ -415,10 +572,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       )}
 
       {/* Editor Area */}
-      <div className={`relative resize-y overflow-auto h-[500px] min-h-[300px] ${forceLight ? 'bg-white' : 'bg-gray-900'}`}>
+      <div className={`relative resize-y ${mode === 'visual' ? 'overflow-auto' : 'overflow-hidden'} h-[500px] min-h-[300px] ${forceLight ? 'bg-white' : 'bg-gray-900'}`}>
         {mode === 'visual' ? (
           <div 
-            className={`p-6 prose max-w-none font-serif cursor-text ${forceLight ? 'prose-slate text-black' : 'dark:prose-invert'}`}
+            className={`p-6 prose max-w-none font-serif cursor-text min-h-full ${forceLight ? 'prose-slate text-black' : 'dark:prose-invert'}`}
             onClick={() => editor.chain().focus().run()}
           >
             <EditorContent editor={editor} />
@@ -548,124 +705,105 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           </div>
         ) : mode === 'narration' ? (
           <div className="p-8 h-full flex flex-col gap-8 overflow-auto">
-            <div className="w-full max-w-4xl mx-auto">
-              <div className="flex gap-2">
-                {/* Single URL Input */}
-                <div className={`flex-1 flex items-center gap-2 px-4 py-3 rounded-2xl border transition-all ${forceLight ? 'bg-gray-50 border-gray-200 focus-within:border-blue-500' : 'bg-gray-950 border-gray-800 focus-within:border-blue-500'}`}>
-                  <Globe size={18} className="opacity-30" />
-                  <input
-                    type="text"
-                    value={audioUrl}
-                    onChange={(e) => setAudioUrl(e.target.value)}
-                    placeholder="Cole a URL do áudio aqui..."
-                    className="flex-1 bg-transparent outline-none text-sm"
-                  />
-                </div>
+            <div className="w-full max-w-5xl mx-auto space-y-8">
 
-                {/* ADD Buttons */}
-                <div className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (audioUrl && onSetAudio) {
-                        onSetAudio('male', audioUrl);
-                        setAudioUrl('');
-                      }
-                    }}
-                    className="px-6 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/20 active:scale-95 whitespace-nowrap"
-                    title="Adicionar como Voz Masculina"
-                  >
-                    Adicionar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (audioUrl && onSetAudio) {
-                        onSetAudio('female', audioUrl);
-                        setAudioUrl('');
-                      }
-                    }}
-                    className="px-6 bg-pink-600 text-white font-bold rounded-2xl hover:bg-pink-700 transition-all shadow-lg shadow-pink-500/20 active:scale-95 whitespace-nowrap"
-                    title="Adicionar como Voz Feminina"
-                  >
-                    Adicionar
-                  </button>
-                </div>
-              </div>
-            </div>
 
-            <div className="w-full max-w-4xl mx-auto">
-              <div className="flex items-center gap-4 mb-8">
-                <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
-                <span className="text-xs font-black uppercase tracking-widest opacity-30">PLAYLIST</span>
-                <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Male Audio Card */}
-                <div className={`p-4 rounded-[24px] border transition-all ${forceLight ? 'bg-gray-50 border-gray-100' : 'bg-gray-950 border-gray-800'}`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-600">
-                        <Mic size={16} />
-                      </div>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-blue-600">Voz Masculina</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8" key={`${language}-${level}`}>
+                {/* Male Column */}
+                <div className="space-y-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-600">
+                      <Mic size={20} />
                     </div>
-                    {audioMale && (
-                      <div className="flex items-center gap-1.5 text-[9px] font-bold text-blue-600 uppercase tracking-tighter">
-                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                        ON
+                    <div>
+                      <h3 className="font-bold text-lg leading-none mb-1">Masculino</h3>
+                      <p className="text-[10px] font-medium opacity-40 uppercase tracking-widest">Narração Homem</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className={`flex flex-col gap-2 p-4 rounded-3xl border transition-all ${forceLight ? 'bg-gray-50 border-gray-100' : 'bg-gray-950 border-gray-800'} ${audioMale ? 'border-blue-500/50 bg-blue-500/5' : ''}`}>
+                      <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-1">URL do Áudio</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          key={`male-${language}-${level}`}
+                          defaultValue={audioMale || ''}
+                          onBlur={(e) => {
+                            if (onSetAudio) onSetAudio('male', e.target.value);
+                          }}
+                          placeholder="https://exemplo.com/audio-m.mp3"
+                          className="flex-1 bg-transparent border-b border-[var(--border)] py-1 text-sm outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    {audioMale?.trim() && (
+                      <div className="p-4 rounded-2xl border border-blue-500/10 bg-blue-500/5">
+                        <audio controls src={audioMale.trim()} className="w-full h-8" />
+                        <button 
+                          type="button"
+                          onClick={() => onSetAudio?.('male', '')}
+                          className="mt-3 text-[10px] font-black uppercase text-red-500 hover:text-red-600 transition-colors"
+                        >
+                          Remover Link
+                        </button>
                       </div>
                     )}
                   </div>
-                  {audioMale ? (
-                    <div className="flex flex-col gap-2">
-                      <p className="text-xs opacity-40 truncate px-1">{audioMale}</p>
-                      <button 
-                        type="button"
-                        onClick={() => onSetAudio?.('male', '')}
-                        className="text-[10px] font-black uppercase text-red-500 hover:text-red-600 transition-colors w-fit px-1"
-                      >
-                        Remover
-                      </button>
-                    </div>
-                  ) : (
-                    <p className="text-xs opacity-30 italic px-1">Nenhum áudio masculino adicionado</p>
-                  )}
                 </div>
 
-                {/* Female Audio Card */}
-                <div className={`p-4 rounded-[24px] border transition-all ${forceLight ? 'bg-gray-50 border-gray-100' : 'bg-gray-950 border-gray-800'}`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-pink-500/10 flex items-center justify-center text-pink-600">
-                        <Mic size={16} />
-                      </div>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-pink-600">Voz Feminina</span>
+                {/* Female Column */}
+                <div className="space-y-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-pink-500/10 flex items-center justify-center text-pink-600">
+                      <Mic size={20} />
                     </div>
-                    {audioFemale && (
-                      <div className="flex items-center gap-1.5 text-[9px] font-bold text-pink-600 uppercase tracking-tighter">
-                        <div className="w-1.5 h-1.5 rounded-full bg-pink-500 animate-pulse" />
-                        ON
+                    <div>
+                      <h3 className="font-bold text-lg leading-none mb-1">Feminino</h3>
+                      <p className="text-[10px] font-medium opacity-40 uppercase tracking-widest">Narração Mulher</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className={`flex flex-col gap-2 p-4 rounded-3xl border transition-all ${forceLight ? 'bg-gray-50 border-gray-100' : 'bg-gray-950 border-gray-800'} ${audioFemale ? 'border-pink-500/50 bg-pink-500/5' : ''}`}>
+                      <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-1">URL do Áudio</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          key={`female-${language}-${level}`}
+                          defaultValue={audioFemale || ''}
+                          onBlur={(e) => {
+                            if (onSetAudio) onSetAudio('female', e.target.value);
+                          }}
+                          placeholder="https://exemplo.com/audio-f.mp3"
+                          className="flex-1 bg-transparent border-b border-[var(--border)] py-1 text-sm outline-none focus:border-pink-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    {audioFemale?.trim() && (
+                      <div className="p-4 rounded-2xl border border-pink-500/10 bg-pink-500/5">
+                        <audio controls src={audioFemale.trim()} className="w-full h-8" />
+                        <button 
+                          type="button"
+                          onClick={() => onSetAudio?.('female', '')}
+                          className="mt-3 text-[10px] font-black uppercase text-red-500 hover:text-red-600 transition-colors"
+                        >
+                          Remover Link
+                        </button>
                       </div>
                     )}
                   </div>
-                  {audioFemale ? (
-                    <div className="flex flex-col gap-2">
-                      <p className="text-xs opacity-40 truncate px-1">{audioFemale}</p>
-                      <button 
-                        type="button"
-                        onClick={() => onSetAudio?.('female', '')}
-                        className="text-[10px] font-black uppercase text-red-500 hover:text-red-600 transition-colors w-fit px-1"
-                      >
-                        Remover
-                      </button>
-                    </div>
-                  ) : (
-                    <p className="text-xs opacity-30 italic px-1">Nenhum áudio feminino adicionado</p>
-                  )}
                 </div>
               </div>
+
+              {!audioMale?.trim() && !audioFemale?.trim() && (
+                <div className="p-12 text-center border-2 border-dashed border-[var(--border)] rounded-[40px] opacity-20">
+                  <Music size={48} className="mx-auto mb-4" />
+                  <p className="font-bold">Nenhum áudio configurado para {language} em {level}</p>
+                </div>
+              )}
             </div>
           </div>
         ) : (
